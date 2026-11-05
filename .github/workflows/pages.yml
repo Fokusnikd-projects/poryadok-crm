@@ -25,7 +25,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm test
+      # test:sites checks ChatGPT Sites build output that this workflow does not produce.
+      - run: npm run test:crm
       - name: Build static demo
         run: npx vite build
         env:
