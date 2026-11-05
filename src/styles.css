@@ -125,7 +125,7 @@ input[type=checkbox],input[type=radio]{width:18px;height:18px;margin:0;flex:0 0 
 .table-scroll,.agenda ul,.onboarding,.detail-grid>section,.template-list,.client-orders,.yandex-settings,.clear-data-section,.login-page form{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg);box-shadow:var(--shadow-sm)}
 
 /* ---------- Today ---------- */
-.today{max-width:1040px}
+.today>*{max-width:1040px}
 .stats{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:var(--s3);margin:0 0 var(--s6)}
 .stats>div{padding:14px var(--s4);background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg);box-shadow:var(--shadow-sm)}
 .stats dt{font-size:var(--fs-xs);color:var(--text-3);font-weight:500}
@@ -254,7 +254,7 @@ dd{margin:0}
 .template-row p{font-size:var(--fs-sm)}
 
 /* ---------- Settings ---------- */
-.settings-content{max-width:760px}
+.settings-content>*{max-width:760px}
 .settings-content>h2{margin:var(--s6) 0 var(--s2)}
 .settings-content>p{margin-bottom:var(--s3);color:var(--text-2)}
 .settings-content>p.muted{color:var(--text-3);font-size:var(--fs-sm)}
@@ -287,13 +287,14 @@ dd{margin:0}
 /* ---------- Notices ---------- */
 .warning{display:flex;gap:var(--s3);align-items:flex-start;margin:var(--s2) 0 var(--s4);padding:12px 14px;border:1px solid var(--warn-border);border-radius:var(--r);background:var(--warn-soft);color:var(--warn);font-size:var(--fs-sm)}
 .warning svg{flex-shrink:0;margin-top:1px}
+.warning.blacklist{background:var(--danger-soft);border-color:var(--danger-border);color:var(--danger)}
 .warning p{margin-top:2px}
 .inline-hint{display:flex;flex-direction:column;gap:var(--s3);align-items:flex-start;margin-bottom:var(--s4);padding:14px var(--s4);border-radius:var(--r);background:var(--accent-soft);font-size:var(--fs-sm)}
 .toast{position:fixed;left:50%;bottom:24px;z-index:30;display:flex;gap:10px;align-items:center;padding:10px 16px;border-radius:10px;background:var(--toast-bg);color:var(--toast-text);box-shadow:var(--shadow-lg);font-size:var(--fs);transform:translateX(-50%);animation:toast-in var(--base) var(--ease)}
 
 /* ---------- Modal ---------- */
 .overlay{position:fixed;inset:0;z-index:20;display:flex;align-items:center;justify-content:center;padding:var(--s5);background:var(--overlay);animation:fade var(--base) var(--ease)}
-.modal{width:560px;max-width:100%;max-height:90vh;overflow:auto;padding:var(--s5);background:var(--surface);border:1px solid var(--border);border-radius:var(--r-xl);box-shadow:var(--shadow-lg);animation:pop var(--base) var(--ease)}
+.modal{width:560px;max-width:100%;max-height:calc(100vh - 32px);overflow:auto;padding:var(--s5);background:var(--surface);border:1px solid var(--border);border-radius:var(--r-xl);box-shadow:var(--shadow-lg);animation:pop var(--base) var(--ease)}
 .modal>header{display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--s5)}
 .modal h3{margin:var(--s4) 0 var(--s3);font-size:var(--fs)}
 .modal form>.form-actions{position:sticky;bottom:calc(-1 * var(--s5));z-index:2;margin:var(--s5) calc(-1 * var(--s5)) calc(-1 * var(--s5));padding:var(--s3) var(--s5) var(--s4);background:var(--surface);border-top:1px solid var(--border)}
@@ -307,6 +308,19 @@ dd{margin:0}
 .payment-summary b{display:block;margin-top:2px;font-size:var(--fs-xl);color:var(--text);font-variant-numeric:tabular-nums}
 .payment-row{display:flex;align-items:center;padding:10px 0;border-bottom:1px solid var(--border);font-size:var(--fs-sm)}
 .payment-row b{margin-left:auto;font-variant-numeric:tabular-nums}
+
+/* Wide two-column dialogs (order, client): everything fits without scrolling on a laptop. */
+.modal.wide{width:880px}
+.modal-cols{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:0 var(--s5)}
+.modal-col+.modal-col{padding-left:var(--s5);border-left:1px solid var(--border)}
+.modal .col-title{margin:0 0 var(--s2)}
+.modal-col>.contact-form:first-of-type{margin-top:0;padding-top:0;border-top:0}
+.modal .field{margin-bottom:var(--s3)}
+.modal textarea{min-height:64px}
+.modal>header{margin-bottom:var(--s4)}
+.modal-col .payment-summary{margin-top:0}
+.tag-danger.tiny{margin-left:6px;padding:0 4px;font-size:10px;line-height:15px;vertical-align:1px}
+@media (max-width:720px){.modal-cols{grid-template-columns:1fr}.modal-col+.modal-col{padding-left:0;border-left:0;border-top:1px solid var(--border);padding-top:var(--s3);margin-top:var(--s2)}}
 
 /* ---------- Login ---------- */
 .login-page{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--s3);padding:var(--s5);background:var(--bg)}
@@ -351,6 +365,17 @@ dd{margin:0}
   .board-actions{width:100%;justify-content:space-between}
   .board-section>.section-heading{flex-wrap:wrap}
   .client-search,.toolbar select{width:100%}
+  /* Tables become stacked cards on phones; numbers keep their labels. */
+  .table-scroll table,.table-scroll tbody,.table-scroll tfoot{display:block}
+  .table-scroll thead{display:none}
+  .table-scroll tr{display:block;padding:12px var(--s4);border-top:1px solid var(--border)}
+  .table-scroll tbody tr:first-child{border-top:0}
+  .table-scroll td{display:block;padding:1px 0;border:0;text-align:left}
+  .table-scroll td[data-label]{display:flex;justify-content:space-between;gap:var(--s3)}
+  .table-scroll td[data-label]::before{content:attr(data-label);color:var(--text-3);font-weight:400}
+  .table-scroll tfoot tr{background:var(--sunken)}
+  .table-scroll tfoot td{background:none}
+  .table-scroll td:first-child{margin-bottom:4px}
   .detail-grid,.form-grid,.contact-form{grid-template-columns:1fr}
   .contact-form>small{grid-column:auto}
   .report-filters .field,.report-filters input,.report-filters select{width:100%}

@@ -6,7 +6,7 @@ const shortDate = d => new Date(d + 'T12:00:00').toLocaleDateString('ru-RU', { d
 
 function OrderRow({ order, client, tone, money, rest, openOrder }) {
   return <li><button className={`agenda-row ${tone}`} onClick={() => openOrder(order)}>
-    <span className="agenda-main"><b>{order.title}</b><span className="muted">{client?.name || 'Без клиента'}</span></span>
+    <span className="agenda-main"><b>{order.title}</b><span className="muted">{client?.name || 'Без клиента'}{client?.blacklisted && <span className="tag-danger tiny" title="Клиент в чёрном списке">ЧС</span>}</span></span>
     <span className="agenda-side">{rest > 0 && <span className="agenda-money" title="Осталось оплатить">к оплате {money(rest)}</span>}<time dateTime={order.due}>{shortDate(order.due)}</time></span>
   </button></li>;
 }
