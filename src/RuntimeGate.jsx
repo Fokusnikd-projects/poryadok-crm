@@ -1,5 +1,5 @@
 import React,{useEffect,useState} from 'react';
-import {App} from './App.jsx';
+import {App,LogoMark} from './App.jsx';
 import {sharedRequest} from './useCrmData.js';
 import {STATIC_DEMO} from './runtime-mode.js';
 export function RuntimeGate(){
@@ -9,6 +9,6 @@ export function RuntimeGate(){
   async function logout(){try{await sharedRequest('/api/logout',{method:'POST',body:'{}'});setShared(null);setPassword('')}catch{window.alert('Не удалось выйти. Проверьте подключение и повторите выход.')}}
   if(mode==='local')return <App/>;
   if(shared)return <App sharedConfig={shared} onLogout={logout}/>;
-  if(mode!=='shared')return <div className="login-page"><h1>Порядок</h1><p>{error||'Подключаемся к CRM…'}</p></div>;
-  return <main className="login-page"><form onSubmit={async e=>{e.preventDefault();setBusy(true);setError('');try{await sharedRequest('/api/login',{method:'POST',body:JSON.stringify({login,password})});setPassword('');await session()}catch(e){setError(e.message)}finally{setPassword('');setBusy(false)}}}><h1>Порядок</h1><p>Ваша личная база заказов</p><label className="field"><span>Логин</span><input autoComplete="username" required value={login} onChange={e=>setLogin(e.target.value)} disabled={busy}/></label><label className="field"><span>Пароль</span><input type="password" autoComplete="current-password" required value={password} onChange={e=>setPassword(e.target.value)} disabled={busy}/></label>{error&&<p className="late" role="alert">{error}</p>}<button className="primary" disabled={busy}>{busy?'Входим…':'Войти'}</button></form></main>;
+  if(mode!=='shared')return <div className="login-page"><h1 className="login-brand"><LogoMark/>Порядок</h1><p>{error||'Подключаемся к CRM…'}</p></div>;
+  return <main className="login-page"><form onSubmit={async e=>{e.preventDefault();setBusy(true);setError('');try{await sharedRequest('/api/login',{method:'POST',body:JSON.stringify({login,password})});setPassword('');await session()}catch(e){setError(e.message)}finally{setPassword('');setBusy(false)}}}><h1 className="login-brand"><LogoMark/>Порядок</h1><p>Ваша личная база заказов</p><label className="field"><span>Логин</span><input autoComplete="username" required value={login} onChange={e=>setLogin(e.target.value)} disabled={busy}/></label><label className="field"><span>Пароль</span><input type="password" autoComplete="current-password" required value={password} onChange={e=>setPassword(e.target.value)} disabled={busy}/></label>{error&&<p className="late" role="alert">{error}</p>}<button className="primary" disabled={busy}>{busy?'Входим…':'Войти'}</button></form></main>;
 }
