@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: poryadok-crm
+    runtime: node
+    plan: starter
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /healthz
+    disk:
+      name: crm-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      - key: NODE_ENV
+        value: production
+      - key: CRM_DB_PATH
+        value: /var/data/crm.sqlite
+      - key: CRM_OWNER_LOGIN
+        value: owner
+      - key: CRM_COLLEAGUE_LOGIN
+        value: colleague
+      - key: CRM_OWNER_PASSWORD
+        sync: false
+      - key: CRM_COLLEAGUE_PASSWORD
+        sync: false
