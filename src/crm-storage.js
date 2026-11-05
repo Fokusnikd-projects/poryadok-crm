@@ -15,12 +15,20 @@ export function persistCrm(data, storage = localStorage) {
   else storage.removeItem(CRM_KEY);
 }
 
-// Clear all storage belonging to this app's origin, including obsolete demo keys.
+export const APP_KEY_PREFIX = 'poryadok';
+// Remove every localStorage key this app wrote (current and obsolete demo keys), but nothing
+// else: on GitHub Pages the origin (<owner>.github.io) is shared with the owner's other sites.
+function removeAppKeys(storage) {
+  const keys = [];
+  for (let i = 0; i < storage.length; i++) { const key = storage.key(i); if (key?.startsWith(APP_KEY_PREFIX)) keys.push(key); }
+  keys.forEach(key => storage.removeItem(key));
+}
 // Local erasure still runs if the server is unavailable; report that separately.
+// purgeServer = null means there is no integration server (static online demo).
 export async function eraseCrm({ purgeServer, local = localStorage, session = sessionStorage }) {
   let serverError = '';
-  try { await purgeServer(); } catch { serverError = 'Данные браузера удалены, но отключение серверной сессии не подтверждено. Повторите очистку, когда локальный сервер доступен.'; }
-  local.clear();
-  session.clear();
+  if (purgeServer) { try { await purgeServer(); } catch { serverError = 'Данные браузера удалены, но отключение серверной сессии не подтверждено. Повторите очистку, когда локальный сервер доступен.'; } }
+  removeAppKeys(local);
+  session.clear(); // per-tab temporary data
   return { data: emptyCrm(), serverError };
 }

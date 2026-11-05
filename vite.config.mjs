@@ -3,6 +3,8 @@ import react from "@vitejs/plugin-react";
 import { yandexPlugin } from "./server/yandex-api.mjs";
 
 export default defineConfig({
+  // GitHub Pages serves the project under /<repo>/ ; local runs stay at /.
+  base: process.env.VITE_BASE || "/",
   build: {
     outDir: "dist/client",
   },

@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { STATIC_DEMO, LOCAL_RUN_GUIDE } from './runtime-mode.js';
 
 async function api(path, body) {
   const response = await fetch(`/api/yandex/${path}`, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -9,7 +10,14 @@ async function api(path, body) {
 const actionNames = { import: 'Новый контакт в CRM', pull: 'Обновить в CRM', push: 'Обновить в Яндексе', create: 'Создать в Яндексе', link: 'Связать контакты', missing: 'Контакт отсутствует в Яндексе — оставим в CRM', conflict: 'Нужно выбрать версию' };
 const cardText = contact => [contact?.name, contact?.phone, contact?.email].filter(Boolean).join(' · ') || 'Нет данных';
 
-export function YandexContacts({ clients, onApply, onBusyChange }) {
+// The online demo has no server, and a browser cannot talk to Yandex CardDAV directly.
+export function YandexContacts(props) {
+  if (STATIC_DEMO) return <section className="yandex-settings" aria-label="Интеграция Яндекс Контактов"><h2>Яндекс Контакты</h2>
+    <div className="inline-hint"><p><b>В онлайн-версии синхронизация недоступна.</b> Для связи с Яндексом нужна небольшая программа-посредник, а она есть только при запуске CRM на вашем компьютере. Так пароль Яндекса не уходит ни на чей сервер.</p>
+    <a className="secondary" href={LOCAL_RUN_GUIDE} target="_blank" rel="noreferrer">Как запустить CRM у себя</a></div></section>;
+  return <YandexSync {...props}/>;
+}
+function YandexSync({ clients, onApply, onBusyChange }) {
   const live = useRef(true);
   useEffect(() => { live.current = true; return () => { live.current = false; }; }, []);
   const [state, setState] = useState(null), [username, setUsername] = useState(''), [password, setPassword] = useState(''), [book, setBook] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState(''), [plan, setPlan] = useState(null), [choices, setChoices] = useState({}), [result, setResult] = useState(null);

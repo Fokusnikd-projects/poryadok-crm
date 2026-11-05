@@ -3,8 +3,14 @@ import assert from 'node:assert/strict';
 import { CRM_KEY, loadCrm, persistCrm, emptyCrm, eraseCrm } from '../src/crm-storage.js';
 const storage = entries => {
   const map = new Map(Object.entries(entries || {}));
-  return { getItem: key => map.get(key) ?? null, setItem: (key, value) => map.set(key, value), removeItem: key => map.delete(key), clear: () => map.clear(), get length() { return map.size; } };
+  return { getItem: key => map.get(key) ?? null, setItem: (key, value) => map.set(key, value), removeItem: key => map.delete(key), clear: () => map.clear(), key: i => [...map.keys()][i] ?? null, get length() { return map.size; } };
 };
+test('erase keeps other sites data on a shared origin and needs no server in the online demo', async () => {
+  const local = storage({ [CRM_KEY]: 'private', 'poryadok-demo-v1': 'legacy', 'other-site': 'keep' }), session = storage({ draft: 'x' });
+  const result = await eraseCrm({ local, session, purgeServer: null });
+  assert.equal(result.serverError, ''); assert.equal(local.getItem(CRM_KEY), null); assert.equal(local.getItem('poryadok-demo-v1'), null);
+  assert.equal(local.getItem('other-site'), 'keep'); assert.equal(session.length, 0);
+});
 test('erase removes current, legacy and temporary browser data and calls server purge', async () => {
   const local = storage({ [CRM_KEY]: 'private', 'poryadok-demo-v1': 'legacy' }), session = storage({ preview: 'contacts' });
   let calls = 0;

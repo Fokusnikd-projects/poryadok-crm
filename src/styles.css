@@ -119,3 +119,4 @@ tfoot td{font-weight:700;border-top:2px solid #cfd8e6;border-bottom:0}
  .modal form>.form-actions{bottom:-20px;margin:20px -20px -20px;padding:14px 20px 16px}
  .board-actions{width:100%;justify-content:space-between}
 }
+a.secondary,a.primary{text-decoration:none}
