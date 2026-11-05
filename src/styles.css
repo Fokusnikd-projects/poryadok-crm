@@ -222,6 +222,19 @@ tfoot td{font-weight:650;border-top:1px solid var(--border-strong);background:va
 .report-filters .field{margin:0}
 .report-note{max-width:900px;margin-bottom:var(--s4);font-size:var(--fs-sm);color:var(--text-3)}
 
+/* Segmented filter (clients). */
+.segmented{display:inline-flex;gap:2px;margin-bottom:var(--s3);padding:3px;border-radius:10px;background:var(--sunken);max-width:100%;overflow-x:auto;scrollbar-width:none}
+.segmented button{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;border:0;border-radius:var(--r);background:none;color:var(--text-2);font-size:var(--fs-sm);font-weight:550;white-space:nowrap;transition:background var(--fast) var(--ease),color var(--fast) var(--ease)}
+.segmented button:hover{color:var(--text)}
+.segmented button.active{background:var(--surface);color:var(--text);box-shadow:var(--shadow-sm)}
+.seg-count{min-width:20px;padding:0 6px;border-radius:999px;background:var(--surface);color:var(--text-3);font-size:11px;line-height:18px;text-align:center;font-variant-numeric:tabular-nums}
+.segmented button.active .seg-count{background:var(--sunken)}
+.seg-danger svg{color:var(--danger)}
+.seg-danger.active .seg-count{background:var(--danger-soft);color:var(--danger)}
+.list-note{margin-bottom:var(--s3);font-size:var(--fs-sm);color:var(--text-3)}
+.blacklist-table .reason{max-width:420px;color:var(--text-2)}
+.row-action{text-align:right;white-space:nowrap}
+
 /* ---------- Client page ---------- */
 .detail-grid{display:grid;grid-template-columns:1.3fr 1fr;gap:var(--s4);margin-bottom:var(--s5)}
 .detail-grid>section{padding:var(--s5)}
@@ -365,6 +378,9 @@ dd{margin:0}
   .board-actions{width:100%;justify-content:space-between}
   .board-section>.section-heading{flex-wrap:wrap}
   .client-search,.toolbar select{width:100%}
+  .segmented{display:grid;grid-template-columns:repeat(3,1fr);width:100%}
+  .segmented button{justify-content:center;padding:0 6px}
+  .segmented .seg-danger{grid-column:1/-1}
   /* Tables become stacked cards on phones; numbers keep their labels. */
   .table-scroll table,.table-scroll tbody,.table-scroll tfoot{display:block}
   .table-scroll thead{display:none}
@@ -376,6 +392,8 @@ dd{margin:0}
   .table-scroll tfoot tr{background:var(--sunken)}
   .table-scroll tfoot td{background:none}
   .table-scroll td:first-child{margin-bottom:4px}
+  .table-scroll td.row-action{margin-top:6px;text-align:left}
+  .table-scroll td.reason{margin-bottom:4px}
   .detail-grid,.form-grid,.contact-form{grid-template-columns:1fr}
   .contact-form>small{grid-column:auto}
   .report-filters .field,.report-filters input,.report-filters select{width:100%}
