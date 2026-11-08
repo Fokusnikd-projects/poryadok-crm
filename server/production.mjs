@@ -7,15 +7,21 @@ import { openSharedStore } from './shared-store.mjs';
 import { createYandexMiddleware } from './yandex-api.mjs';
 
 async function body(req) { const chunks=[];let size=0;for await(const c of req){size+=c.length;if(size>16*1024*1024)throw Object.assign(new Error('Слишком большой запрос'),{status:413});chunks.push(c)}try{return JSON.parse(Buffer.concat(chunks).toString('utf8')||'{}')}catch{throw Object.assign(new Error('Некорректный запрос'),{status:400})} }
-export function createProductionServer({origin,dbPath,users,clientDir=resolve('dist/client'),connectYandex,now=()=>Date.now()}){
+export function createProductionServer({origin,dbPath,users=[],clientDir=resolve('dist/client'),connectYandex,now=()=>Date.now(),guestMode=false,maxGuests=50,guestTtl=6*3600000,trustProxy=false}){
   const url=new URL(origin);if(!['https:','http:'].includes(url.protocol)||url.pathname!=='/'||url.username||url.password)throw Error('PUBLIC_ORIGIN должен быть адресом сайта без пути.');
   const secure=url.protocol==='https:';if(!secure&&!['127.0.0.1','localhost'].includes(url.hostname))throw Error('Для размещения требуется HTTPS.');
-  if(!Array.isArray(users)||users.length<2||users.some(u=>!u.login||typeof u.password!=='string'||u.password.length<12)||new Set(users.map(u=>u.login)).size!==users.length)throw Error('Настройте два разных логина и пароли от 12 символов.');
-  const accounts=users.map(u=>{const salt=randomBytes(16);return{login:u.login,role:u.role,salt,hash:scryptSync(u.password,salt,64)}}),sessions=new Map(),attempts=new Map(),stores=new Map();
-  const storeFor=login=>{if(!stores.has(login)){const file=dbPath===':memory:'?dbPath:resolve(dirname(dbPath),basename(dbPath,extname(dbPath))+'-'+createHash('sha256').update(login).digest('hex')+'.sqlite');stores.set(login,openSharedStore(file))}return stores.get(login)};
+  if(!Array.isArray(users)||users.length<(guestMode?0:2)||users.some(u=>!u.login||typeof u.password!=='string'||u.password.length<12||u.login.startsWith('guest-'))||new Set(users.map(u=>u.login)).size!==users.length)throw Error(guestMode?'Пароли аккаунтов должны быть от 12 символов, логины — разными и не начинаться с guest-.':'Настройте два разных логина и пароли от 12 символов.');
+  const accounts=users.map(u=>{const salt=randomBytes(16);return{login:u.login,role:u.role,salt,hash:scryptSync(u.password,salt,64)}}),sessions=new Map(),attempts=new Map(),guestAttempts=new Map(),stores=new Map();
+  const isGuest=login=>login.startsWith('guest-');
+  const storeFor=login=>{if(!stores.has(login)){const file=dbPath===':memory:'||isGuest(login)?':memory:':resolve(dirname(dbPath),basename(dbPath,extname(dbPath))+'-'+createHash('sha256').update(login).digest('hex')+'.sqlite');stores.set(login,openSharedStore(file))}return stores.get(login)};
   const yandex=createYandexMiddleware({connect:connectYandex,allowedOrigin:url.origin,secureCookies:secure,purgeAllSessions:false});
+  // Guest data lives only in an in-memory SQLite database and disappears with the session.
+  const dropGuest=login=>{yandex.destroyOwner(login);const store=stores.get(login);if(store){store.close();stores.delete(login)}};
+  const endSession=key=>{const s=sessions.get(key);if(!s)return;sessions.delete(key);if(s.guest)dropGuest(s.login);else yandex.destroyOwner(s.login)};
+  const clientIp=req=>(trustProxy&&String(req.headers['x-forwarded-for']||'').split(',')[0].trim())||req.socket.remoteAddress||'local';
+  const publicUser=s=>s.guest?{login:s.login,role:'guest',expires:s.expires}:{login:s.login,role:s.role};
   const cookie=(token,age)=>`crm_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${age}${secure?'; Secure':''}`;
-  const timer=setInterval(()=>{for(const [k,s]of sessions)if(s.expires<now()){sessions.delete(k);yandex.destroyOwner(s.login)}for(const[k,a]of attempts)if(a.until<now())attempts.delete(k)},60000);timer.unref();
+  const timer=setInterval(()=>{for(const [k,s]of sessions)if(s.expires<now())endSession(k);for(const map of [attempts,guestAttempts])for(const[k,a]of map)if(a.until<now())map.delete(k)},60000);timer.unref();
   const server=createServer(async(req,res)=>{
     const send=(status,value)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(value))};
     res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');res.setHeader('X-Frame-Options','DENY');
@@ -25,18 +31,26 @@ export function createProductionServer({origin,dbPath,users,clientDir=resolve('d
       if(path==='/healthz')return send(200,{ok:true});
       if(req.headers.host!==url.host)return send(403,{error:'Неверный адрес сайта.'});
       if(!['GET','HEAD'].includes(req.method)&&req.headers.origin!==url.origin)return send(403,{error:'Запрос должен исходить из CRM.'});
-      if(path==='/api/runtime')return send(200,{shared:true});
+      if(path==='/api/runtime')return send(200,{shared:true,guest:guestMode,accounts:accounts.length>0,guestHours:Math.round(guestTtl/3600000)});
       const token=/(?:^|;\s*)crm_session=([a-f0-9]+)/.exec(req.headers.cookie||'')?.[1],session=sessions.get(token);
-      const user=session&&session.expires>now()?{login:session.login,role:session.role}:null;
+      const user=session&&session.expires>now()?publicUser(session):null;
       if(path==='/api/session'&&req.method==='GET')return send(200,{user});
       if(path==='/api/login'&&req.method==='POST'){
-        const ip=req.socket.remoteAddress||'local';const count=attempts.get(ip);if(count&&count.count>=10&&count.until>now())return send(429,{error:'Слишком много попыток входа. Повторите через 15 минут.'});
+        const ip=clientIp(req);const count=attempts.get(ip);if(count&&count.count>=10&&count.until>now())return send(429,{error:'Слишком много попыток входа. Повторите через 15 минут.'});
         const input=await body(req);const account=accounts.find(a=>a.login===input.login);const hash=scryptSync(String(input.password||'').slice(0,1024),account?.salt||Buffer.alloc(16),64);
         if(!account||!timingSafeEqual(hash,account.hash)){attempts.set(ip,{count:(count?.count||0)+1,until:now()+15*60000});return send(401,{error:'Неверный логин или пароль.'})}
-        attempts.delete(ip);if(token)sessions.delete(token);const id=randomBytes(32).toString('hex');sessions.set(id,{login:account.login,role:account.role,expires:now()+12*3600000});res.setHeader('Set-Cookie',cookie(id,43200));return send(200,{user:{login:account.login,role:account.role}});
+        attempts.delete(ip);if(token)endSession(token);const id=randomBytes(32).toString('hex');sessions.set(id,{login:account.login,role:account.role,expires:now()+12*3600000});res.setHeader('Set-Cookie',cookie(id,43200));return send(200,{user:{login:account.login,role:account.role}});
+      }
+      if(path==='/api/guest'&&req.method==='POST'){
+        if(!guestMode)return send(404,{error:'Гостевой режим выключен.'});
+        const ip=clientIp(req),count=guestAttempts.get(ip);if(count&&count.count>=10&&count.until>now())return send(429,{error:'Слишком много гостевых входов. Повторите через час.'});
+        if([...sessions.values()].filter(s=>s.guest).length>=maxGuests)return send(503,{error:'Сейчас слишком много гостей. Попробуйте позже.'});
+        guestAttempts.set(ip,{count:(count?.count||0)+1,until:count?.until>now()?count.until:now()+3600000});
+        if(token)endSession(token);const id=randomBytes(32).toString('hex'),login='guest-'+randomBytes(4).toString('hex');
+        sessions.set(id,{login,role:'guest',guest:true,expires:now()+guestTtl});storeFor(login);res.setHeader('Set-Cookie',cookie(id,Math.floor(guestTtl/1000)));return send(200,{user:publicUser(sessions.get(id))});
       }
       if(path.startsWith('/api/')&&!user)return send(401,{error:'Войдите в CRM.'});
-      if(path==='/api/logout'&&req.method==='POST'){sessions.delete(token);yandex.destroyOwner(user.login);res.setHeader('Set-Cookie',[cookie('',0),`crm_yandex=; HttpOnly; SameSite=Strict; Path=/api/yandex; Max-Age=0${secure?'; Secure':''}`]);return send(200,{ok:true})}
+      if(path==='/api/logout'&&req.method==='POST'){endSession(token);res.setHeader('Set-Cookie',[cookie('',0),`crm_yandex=; HttpOnly; SameSite=Strict; Path=/api/yandex; Max-Age=0${secure?'; Secure':''}`]);return send(200,{ok:true})}
       const store=user?storeFor(user.login):null;
       if(path==='/api/state'&&req.method==='GET')return send(200,store.read());
       if(path==='/api/state'&&req.method==='PUT'){

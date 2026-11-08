@@ -61,3 +61,24 @@ test('accounts isolate records, writes, clear, Yandex sessions and logout',async
   await request('/api/logout','POST',{},owner);assert.equal((await request('/api/state','GET',undefined,owner)).status,401);
   assert.equal((await request('/api/state','GET',undefined,colleague)).status,200);
 });
+test('guest mode: each guest gets an isolated in-memory base that disappears on logout',async t=>{
+  const probe=await import('node:net');const socket=probe.createServer();await new Promise(r=>socket.listen(0,'127.0.0.1',r));const port=socket.address().port;await new Promise(r=>socket.close(r));
+  const origin=`http://127.0.0.1:${port}`,app=createProductionServer({origin,dbPath:':memory:',users:[],guestMode:true,maxGuests:2,connectYandex:async()=>({books:[],forBook:()=>({async read(){return[]}})})});
+  await new Promise(r=>app.server.listen(port,'127.0.0.1',r));t.after(()=>app.close());
+  const request=async(path,method='GET',data,cookie)=>{const response=await fetch(origin+path,{method,headers:{Origin:origin,'Content-Type':'application/json',...(cookie?{Cookie:cookie}:{})},body:data===undefined?undefined:JSON.stringify(data)});return{status:response.status,body:await response.json(),cookie:response.headers.get('set-cookie')?.split(';')[0]}};
+  const runtime=await request('/api/runtime');assert.equal(runtime.body.guest,true);assert.equal(runtime.body.accounts,false);
+  assert.equal((await request('/api/login','POST',{login:'owner',password:'anything-long-enough'})).status,401);
+  const g1=await request('/api/guest','POST',{}),g2=await request('/api/guest','POST',{});
+  assert.equal(g1.status,200);assert.equal(g1.body.user.role,'guest');assert.notEqual(g1.body.user.login,g2.body.user.login);
+  assert.equal((await request('/api/guest','POST',{})).status,503);
+  const start=await request('/api/state','GET',undefined,g1.cookie);assert.equal((await request('/api/state','PUT',{base:start.body.data,data:example()},g1.cookie)).status,200);
+  assert.equal((await request('/api/state','GET',undefined,g2.cookie)).body.data.orders.length,0);
+  assert.equal((await request('/api/session','GET',undefined,g1.cookie)).body.user.login,g1.body.user.login);
+  await request('/api/logout','POST',{},g1.cookie);assert.equal((await request('/api/state','GET',undefined,g1.cookie)).status,401);
+  const again=await request('/api/guest','POST',{});assert.equal(again.status,200);
+  assert.equal((await request('/api/state','GET',undefined,again.cookie)).body.data.orders.length,0);
+});
+test('guest mode is off by default and still requires two accounts',()=>{
+  assert.throws(()=>createProductionServer({origin:'http://127.0.0.1:3000',dbPath:':memory:',users:[]}));
+  assert.throws(()=>createProductionServer({origin:'http://127.0.0.1:3000',dbPath:':memory:',guestMode:true,users:[{login:'guest-x',password:'long-enough-pass',role:'owner'}]}));
+});
