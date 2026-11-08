@@ -17,36 +17,66 @@ export async function yandexFetch(url, options = {}) {
   throw new Error('Слишком много перенаправлений');
 }
 
-// Fallback reader: plain PROPFIND (Depth 1) for the card list, then GET for each card.
-// Used when the server rejects the REPORT requests that tsdav sends.
-const xmlText = s => s.replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim();
-export async function readBookByGet(bookUrl, authorization, fetcher = yandexFetch) {
+// Reader for servers without addressbook-query (carddav.yandex.ru answers 403 supported-report):
+// PROPFIND (Depth 1) lists the cards, then one addressbook-multiget REPORT downloads them in bulk.
+// If multiget is refused too, cards are downloaded one by one with GET.
+const xmlText = s => s.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1').replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16))).replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
+  .replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+const tag = (name, xml) => new RegExp(String.raw`<(?:[\w-]+:)?${name}\b[^>]*>([\s\S]*?)</(?:[\w-]+:)?${name}>`).exec(xml)?.[1];
+const responsesOf = xml => [...xml.matchAll(/<(?:[\w-]+:)?response\b[\s\S]*?<\/(?:[\w-]+:)?response>/g)].map(([r]) => r);
+const escapeXml = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+export async function listBook(bookUrl, authorization, fetcher = yandexFetch) {
   const res = await fetcher(bookUrl, { method: 'PROPFIND', headers: { Authorization: authorization, Depth: '1', 'Content-Type': 'application/xml; charset=utf-8' },
     body: '<?xml version="1.0" encoding="utf-8"?><d:propfind xmlns:d="DAV:"><d:prop><d:getetag/><d:resourcetype/></d:prop></d:propfind>' });
   if (res.status !== 207 && !res.ok) throw new Error(`PROPFIND ${res.status}`);
   const xml = await res.text(), self = bookUrl.replace(/\/$/, '');
-  const items = [...xml.matchAll(/<(?:[\w-]+:)?response\b[\s\S]*?<\/(?:[\w-]+:)?response>/g)].map(([r]) => {
-    const href = /<(?:[\w-]+:)?href\b[^>]*>([^<]+)</.exec(r)?.[1];
-    return href && { url: new URL(xmlText(href), bookUrl).href, etag: xmlText(/<(?:[\w-]+:)?getetag\b[^>]*>([^<]*)</.exec(r)?.[1] || ''), collection: /<(?:[\w-]+:)?collection\b/.test(r) };
+  const responses = responsesOf(xml);
+  const items = responses.map(r => {
+    const href = tag('href', r);
+    return href && { url: new URL(xmlText(href).trim(), bookUrl).href, etag: xmlText(tag('getetag', r) || '').trim(), collection: /<(?:[\w-]+:)?collection\b/.test(r) };
   }).filter(i => i && !i.collection && i.url.replace(/\/$/, '') !== self);
-  const responses = (xml.match(/<(?:[\w-]+:)?response\b/g) || []).length;
-  console.error(`[yandex] PROPFIND ${res.status}: ${responses} responses, ${items.length} cards`);
+  console.error(`[yandex] PROPFIND ${res.status}: ${responses.length} responses, ${items.length} cards`);
   if (!items.length) console.error('[yandex] PROPFIND body start:', xml.slice(0, 800).replace(/\s+/g, ' '));
+  return items;
+}
+export async function multigetCards(bookUrl, items, authorization, fetcher = yandexFetch) {
   const cards = [];
-  for (let i = 0; i < items.length; i += 8) {
-    const batch = await Promise.all(items.slice(i, i + 8).map(async item => {
+  for (let i = 0; i < items.length; i += 200) {
+    const chunk = items.slice(i, i + 200);
+    const body = '<?xml version="1.0" encoding="utf-8"?><c:addressbook-multiget xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:carddav"><d:prop><d:getetag/><c:address-data/></d:prop>'
+      + chunk.map(item => `<d:href>${escapeXml(new URL(item.url).pathname)}</d:href>`).join('') + '</c:addressbook-multiget>';
+    const res = await fetcher(bookUrl, { method: 'REPORT', headers: { Authorization: authorization, Depth: '1', 'Content-Type': 'application/xml; charset=utf-8' }, body });
+    if (res.status !== 207) throw Object.assign(new Error(`multiget ${res.status}`), { status: res.status });
+    const found = responsesOf(await res.text()).map(r => ({ url: new URL(xmlText(tag('href', r) || '').trim(), bookUrl).href, etag: xmlText(tag('getetag', r) || '').trim(), data: xmlText(tag('address-data', r) || '') }));
+    if (found.filter(c => c.data.includes('BEGIN:VCARD')).length < chunk.length) throw new Error(`multiget returned ${found.length} of ${chunk.length} cards`);
+    cards.push(...found);
+  }
+  return cards;
+}
+export async function getCards(items, authorization, fetcher = yandexFetch) {
+  const cards = [];
+  for (let i = 0; i < items.length; i += 16) {
+    cards.push(...await Promise.all(items.slice(i, i + 16).map(async item => {
       const r = await fetcher(item.url, { headers: { Authorization: authorization } });
       if (!r.ok) throw new Error(`GET ${r.status}`);
       return { url: item.url, etag: r.headers.get('etag') || item.etag, data: await r.text() };
-    }));
-    cards.push(...batch);
+    })));
   }
   return cards;
+}
+export async function readBookByGet(bookUrl, authorization, fetcher = yandexFetch, state = {}) {
+  const items = await listBook(bookUrl, authorization, fetcher);
+  if (!items.length) return [];
+  if (!state.multigetUnsupported) {
+    try { const cards = await multigetCards(bookUrl, items, authorization, fetcher); console.error(`[yandex] multiget: ${cards.length} cards in bulk`); return cards; }
+    catch (err) { console.error('[yandex] multiget failed, downloading cards one by one:', err.message); if ([403, 405, 501].includes(err.status)) state.multigetUnsupported = true; }
+  }
+  return getCards(items, authorization, fetcher);
 }
 const isCard = c => typeof c?.data === 'string' && c.data.includes('BEGIN:VCARD');
 
 export async function connectYandex(username, password) {
-  let reportUnsupported = false;
+  let reportUnsupported = false; const readState = {};
   const authorization = 'Basic ' + Buffer.from(`${username}:${password}`).toString('base64');
   const client = await createDAVClient({ serverUrl: YANDEX_SERVER, credentials: { username, password }, authMethod: 'Basic', defaultAccountType: 'carddav', fetch: yandexFetch });
   const books = await client.fetchAddressBooks();
@@ -58,7 +88,7 @@ export async function connectYandex(username, password) {
       try { if (reportUnsupported) throw new Error('REPORT not supported'); cards = await client.fetchVCards({ addressBook: book }); if (cards.some(c => !isCard(c))) throw new Error('REPORT returned cards without address-data'); }
       catch (err) { if (!reportUnsupported) console.error('[yandex] fetchVCards failed:', String(err?.message).slice(0, 200)); if (/supported-report|403|501/.test(String(err?.message))) reportUnsupported = true; cards = []; }
       // Some servers answer the REPORT with an empty list instead of an error: double-check with PROPFIND.
-      if (!cards.length) { via = 'PROPFIND'; cards = await readBookByGet(book.url, authorization); }
+      if (!cards.length) { via = 'PROPFIND'; cards = await readBookByGet(book.url, authorization, yandexFetch, readState); }
       console.error(`[yandex] read ${cards.length} entries via ${via} from book ${new URL(book.url).pathname.split('/').filter(Boolean).pop()}`);
       const skipped = cards.filter(c => !isCard(c)).length;
       if (skipped) console.error(`[yandex] skipped ${skipped} non-vCard entries`);
@@ -139,6 +169,8 @@ export function createYandexMiddleware({ connect = connectYandex, now = () => Da
         const transport = session.connection.forBook(book);
         const remote = await transport.read();
         const plan = planSync(body.clients, remote, session.username, book.url);
+        // Sync from a client card: keep only this client's entries (no imports of other contacts).
+        if (typeof body.only === 'string') plan.entries = plan.entries.filter(e => e.clientId === body.only);
         const id = randomBytes(24).toString('hex');
         session.plan = { id, plan, transport, signature: signature(body.clients), expires: now() + 5 * 60000 };
         return send(200, { id, ...publicPlan(plan) });

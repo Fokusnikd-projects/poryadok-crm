@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { readCard, writeCard } from '../server/vcard.mjs';
 import { planSync, applySync, identity, publicPlan } from '../server/sync-engine.mjs';
-import { createYandexMiddleware, connectYandex, yandexFetch, readBookByGet } from '../server/yandex-api.mjs';
+import { createYandexMiddleware, connectYandex, yandexFetch, readBookByGet, multigetCards } from '../server/yandex-api.mjs';
 const account='test@yandex.ru', book='https://carddav.yandex.ru/home/contacts/';
 const remote=(extra={})=>({uid:'uid1',href:book+'uid1.vcf',etag:'"1"',name:'Анна',phone:'+79000000001',email:'anna@example.com',org:'',raw:'BEGIN:VCARD\r\nVERSION:3.0\r\nUID:uid1\r\nFN:Анна\r\nN:;Анна;;;\r\nTEL;TYPE=CELL:+79000000001\r\nTEL;TYPE=HOME:+79000000002\r\nEMAIL:anna@example.com\r\nPHOTO;VALUE=URI:https://example.com/photo.jpg\r\nBDAY:1990-01-02\r\nX-CUSTOM:keep\r\nEND:VCARD\r\n',...extra});
 const linked=(r=remote())=>[{id:'c1',type:'person',name:r.name,blacklisted:true,reason:'CRM only',notes:'CRM only',contacts:[{...identity(r),syncToYandex:true,yandex:{account,book,uid:r.uid,base:identity(r)}}]}];
@@ -138,4 +138,19 @@ test('preview reports our readable error instead of the generic one',async t=>{
   const c=await call('/api/yandex/connect',{username:'u@yandex.ru',password:'p'});
   const p=await call('/api/yandex/preview',{book,clients:[]},c.cookie);
   assert.equal(p.status,502);assert.match(p.body.error,/повторяется UID/);
+});
+test('multiget downloads all cards in one REPORT and decodes escaped address-data',async()=>{
+  const bookUrl='https://carddav.yandex.ru/addressbook/u%40yandex.ru/1/',calls=[];
+  const items=[{url:bookUrl+'YA-1',etag:'"1"'},{url:bookUrl+'YA-2',etag:'"2"'}];
+  const reply=`<D:multistatus xmlns:D="DAV:"><D:response><href xmlns="DAV:">/addressbook/u%40yandex.ru/1/YA-1</href><D:propstat><D:prop><D:getetag>"1"</D:getetag><C:address-data xmlns:C="urn:ietf:params:xml:ns:carddav">BEGIN:VCARD&#13;
+VERSION:3.0&#13;
+FN:Анна &amp; Ко&#13;
+END:VCARD&#13;
+</C:address-data></D:prop></D:propstat></D:response><D:response><href xmlns="DAV:">/addressbook/u%40yandex.ru/1/YA-2</href><D:propstat><D:prop><D:getetag>"2"</D:getetag><C:address-data xmlns:C="urn:ietf:params:xml:ns:carddav"><![CDATA[BEGIN:VCARD
+FN:Борис
+END:VCARD]]></C:address-data></D:prop></D:propstat></D:response></D:multistatus>`;
+  const cards=await multigetCards(bookUrl,items,'Basic x',async(url,o)=>{calls.push(o);return new Response(reply,{status:207})});
+  assert.equal(calls.length,1);assert.equal(calls[0].method,'REPORT');assert.match(calls[0].body,/addressbook-multiget/);
+  assert.deepEqual(cards.map(c=>readCard(c).name),['Анна & Ко','Борис']);
+  await assert.rejects(multigetCards(bookUrl,items,'Basic x',async()=>new Response('<D:error/>',{status:403})),e=>e.status===403);
 });

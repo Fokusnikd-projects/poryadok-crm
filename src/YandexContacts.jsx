@@ -8,6 +8,7 @@ async function api(path, body) {
   return result;
 }
 const actionNames = { import: 'Новый контакт в CRM', pull: 'Обновить в CRM', push: 'Обновить в Яндексе', create: 'Создать в Яндексе', link: 'Связать контакты', missing: 'Контакт отсутствует в Яндексе — оставим в CRM', conflict: 'Нужно выбрать версию' };
+const BOOK_KEY = 'poryadok-yandex-book';
 const cardText = contact => [contact?.name, contact?.phone, contact?.email].filter(Boolean).join(' · ') || 'Нет данных';
 
 // The online demo has no server, and a browser cannot talk to Yandex CardDAV directly.
@@ -29,8 +30,45 @@ function YandexSync({ clients, onApply, onBusyChange, hosted = false }) {
     {error && <div className="warning" role="alert">{error}</div>}
     {!state && !error && <p role="status">Проверяем подключение…</p>}
     {state && !state.connected && <form onSubmit={connect} className="yandex-connect"><label className="field"><span>Почта Яндекса</span><input type="email" autoComplete="username" placeholder="name@yandex.ru" required value={username} onChange={e => setUsername(e.target.value)} disabled={busy}/></label><label className="field"><span>Пароль приложения «Контакты»</span><input type="password" autoComplete="off" required value={password} onChange={e => setPassword(e.target.value)} disabled={busy}/></label><p className="muted">Создайте отдельный пароль для приложения типа «Контакты» в <a href="https://id.yandex.ru/security/app-passwords" target="_blank" rel="noreferrer">Яндекс ID</a>. Основной пароль аккаунта здесь не нужен. Пароль начинает работать через 2–3 часа после создания.</p><p className="muted">{hosted?'Пароль передаётся по HTTPS на сервер, где размещена CRM, и хранится только в его памяти — не в файлах и не в базе. Подключение действует до выхода или окончания двухчасовой сессии. После проверки удалите пароль приложения в Яндекс ID.':'Пароль не записывается в файлы или браузерное хранилище. Подключение действует до перезапуска локального сервера или окончания двухчасовой сессии.'}</p><button className="primary" disabled={busy}>{busy ? 'Подключаем…' : 'Подключить Яндекс'}</button></form>}
-    {state?.connected && <><div className="connection-line"><span className="connected-dot">Подключено: {state.username}</span><button className="text" disabled={busy} onClick={() => run(async () => { await api('disconnect', {}); setState({ connected: false }); setPlan(null); setResult(null); })}>Отключить</button></div><label className="field"><span>Адресная книга</span><select disabled={busy} value={book} onChange={e => { setBook(e.target.value); setPlan(null); }} >{state.books.map(b => <option key={b.url} value={b.url}>{b.name}</option>)}</select></label><p className="muted">Контакты из выбранной книги поступят в CRM. Новые контакты CRM отправятся в Яндекс только с отметкой «Отправлять в Яндекс» в карточке клиента. Связанные контакты обновляются в обе стороны. Удаления не распространяются.</p><button className="secondary" disabled={busy || !book} onClick={() => run(async () => { setPlan(null); setResult(null); const p = await api('preview', { book, clients }); setPlan({ ...p, source: JSON.stringify(clients) }); setChoices({}); })}>{busy ? 'Подождите…' : 'Предпросмотр синхронизации'}</button>
+    {state?.connected && <><div className="connection-line"><span className="connected-dot">Подключено: {state.username}</span><button className="text" disabled={busy} onClick={() => run(async () => { await api('disconnect', {}); setState({ connected: false }); setPlan(null); setResult(null); })}>Отключить</button></div><label className="field"><span>Адресная книга</span><select disabled={busy} value={book} onChange={e => { setBook(e.target.value); sessionStorage.setItem(BOOK_KEY, e.target.value); setPlan(null); }} >{state.books.map(b => <option key={b.url} value={b.url}>{b.name}</option>)}</select></label><p className="muted">Контакты из выбранной книги поступят в CRM. Новые контакты CRM отправятся в Яндекс только с отметкой «Отправлять в Яндекс» в карточке клиента. Связанные контакты обновляются в обе стороны. Удаления не распространяются.</p><button className="secondary" disabled={busy || !book} onClick={() => run(async () => { setPlan(null); setResult(null); const p = await api('preview', { book, clients }); setPlan({ ...p, source: JSON.stringify(clients) }); setChoices({}); })}>{busy ? 'Подождите…' : 'Предпросмотр синхронизации'}</button>
     {plan && <div className="sync-plan"><h3>Изменения перед синхронизацией</h3><p>Получить: {plan.summary.import + plan.summary.pull}. Отправить: {plan.summary.create + plan.summary.push}. Конфликтов: {plan.summary.conflict}.</p>{!plan.items.length && <p>Изменений нет — контакты уже совпадают.</p>}<div className="sync-items">{plan.items.map(item => <div className="sync-item" key={item.key}><b>{item.name}</b><small>{actionNames[item.action]}</small>{item.action === 'conflict' && <fieldset><legend>Какую версию сохранить?</legend>{[['remote','Яндекс',item.remote],['local','CRM',item.local]].map(([value,label,contact]) => <label key={value}><input type="radio" name={`conflict-${item.key}`} checked={choices[item.key] === value} onChange={() => setChoices(c => ({ ...c, [item.key]: value }))}/><span><b>{label}</b><small>{cardText(contact)}</small></span></label>)}</fieldset>}</div>)}</div><button className="primary" disabled={busy || plan.items.some(i => i.action === 'conflict' && !choices[i.key])} onClick={() => run(async () => { if (plan.source !== JSON.stringify(clients)) throw new Error('Клиенты изменились. Обновите предпросмотр.'); const r = await api('apply', { id: plan.id, clients, choices }); if (!live.current) return; onApply(r.clients); setResult(r); setPlan(null); })}>{busy ? 'Синхронизируем…' : 'Применить синхронизацию'}</button></div>}
     {result && <div role="status" className="sync-result"><p>Синхронизация завершена. Применено изменений: {result.applied}.</p>{result.errors.map(e => <p className="late" key={e.key}>{e.name}: {e.message}</p>)}</div>}</>}
   </section>;
+}
+
+// Sync of a single client from its card. Contacts that are not linked yet are marked
+// "send to Yandex": the client is linked to a matching Yandex contact or created there.
+export function ClientYandexSync({ client, clients, onApply, onBusyChange, onOpenSettings }) {
+  const live = useRef(true);
+  useEffect(() => { live.current = true; return () => { live.current = false; }; }, []);
+  const [busy, setBusy] = useState(false), [error, setError] = useState(''), [plan, setPlan] = useState(null), [choices, setChoices] = useState({}), [done, setDone] = useState(null), [needsConnect, setNeedsConnect] = useState(false);
+  useEffect(() => { onBusyChange?.(busy); return () => onBusyChange?.(false); }, [busy, onBusyChange]);
+  useEffect(() => { setPlan(null); setDone(null); setError(''); setNeedsConnect(false); }, [client.id]);
+  if (STATIC_DEMO || !client.contacts.length) return null;
+  const prepared = () => clients.map(c => c.id === client.id ? { ...c, contacts: c.contacts.map(p => p.yandex ? p : { ...p, syncToYandex: true }) } : c);
+  async function run(fn) { if (busy) return; setBusy(true); setError(''); try { await fn(); } catch (e) { if (live.current) setError(e.message); } finally { if (live.current) setBusy(false); } }
+  const preview = () => run(async () => {
+    setPlan(null); setDone(null); setNeedsConnect(false);
+    const status = await api('status');
+    if (!status.connected) { setNeedsConnect(true); return; }
+    const saved = sessionStorage.getItem(BOOK_KEY), book = status.books.find(b => b.url === saved)?.url || status.books[0]?.url;
+    if (!book) throw new Error('В Яндексе нет адресных книг.');
+    const body = prepared(), p = await api('preview', { book, clients: body, only: client.id });
+    if (!live.current) return;
+    if (!p.items.length) { setDone({ applied: 0, errors: [] }); return; }
+    setPlan({ ...p, body }); setChoices({});
+  });
+  const apply = () => run(async () => {
+    const r = await api('apply', { id: plan.id, clients: plan.body, choices });
+    if (!live.current) return;
+    onApply(r.clients); setDone(r); setPlan(null);
+  });
+  return <div className="client-yandex">
+    <button className="secondary" disabled={busy} onClick={preview}>{busy && !plan ? 'Проверяем Яндекс…' : 'Синхронизировать с Яндексом'}</button>
+    {error && <div className="warning" role="alert">{error}</div>}
+    {needsConnect && <div className="inline-hint"><p>Яндекс Контакты не подключены.</p><button className="text link" onClick={onOpenSettings}>Подключить в настройках</button></div>}
+    {plan && <div className="sync-plan"><h3>Что изменится</h3><div className="sync-items">{plan.items.map(item => <div className="sync-item" key={item.key}><b>{item.name}</b><small>{actionNames[item.action]}</small>{item.action === 'conflict' && <fieldset><legend>Какую версию сохранить?</legend>{[['remote','Яндекс',item.remote],['local','CRM',item.local]].map(([value,label,contact]) => <label key={value}><input type="radio" name={`client-conflict-${item.key}`} checked={choices[item.key] === value} onChange={() => setChoices(c => ({ ...c, [item.key]: value }))}/><span><b>{label}</b><small>{cardText(contact)}</small></span></label>)}</fieldset>}</div>)}</div>
+      <div className="form-actions"><button className="secondary" disabled={busy} onClick={() => setPlan(null)}>Отмена</button><button className="primary" disabled={busy || plan.items.some(i => i.action === 'conflict' && !choices[i.key])} onClick={apply}>{busy ? 'Синхронизируем…' : 'Применить'}</button></div></div>}
+    {done && <div role="status" className="sync-result"><p>{done.applied ? `Готово. Применено изменений: ${done.applied}.` : 'Клиент уже совпадает с Яндексом.'}</p>{done.errors.map(e => <p className="late" key={e.key}>{e.name}: {e.message}</p>)}</div>}
+  </div>;
 }
