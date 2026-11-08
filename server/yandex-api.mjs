@@ -29,6 +29,9 @@ export async function readBookByGet(bookUrl, authorization, fetcher = yandexFetc
     const href = /<(?:[\w-]+:)?href>([^<]+)</.exec(r)?.[1];
     return href && { url: new URL(xmlText(href), bookUrl).href, etag: xmlText(/<(?:[\w-]+:)?getetag>([^<]*)</.exec(r)?.[1] || ''), collection: /<(?:[\w-]+:)?collection\b/.test(r) };
   }).filter(i => i && !i.collection && i.url.replace(/\/$/, '') !== self);
+  const responses = (xml.match(/<(?:[\w-]+:)?response\b/g) || []).length;
+  console.error(`[yandex] PROPFIND ${res.status}: ${responses} responses, ${items.length} cards`);
+  if (!items.length) console.error('[yandex] PROPFIND body start:', xml.slice(0, 800).replace(/\s+/g, ' '));
   const cards = [];
   for (let i = 0; i < items.length; i += 8) {
     const batch = await Promise.all(items.slice(i, i + 8).map(async item => {
