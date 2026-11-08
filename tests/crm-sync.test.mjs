@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { readCard, writeCard } from '../server/vcard.mjs';
 import { planSync, applySync, identity, publicPlan } from '../server/sync-engine.mjs';
-import { createYandexMiddleware, connectYandex, yandexFetch } from '../server/yandex-api.mjs';
+import { createYandexMiddleware, connectYandex, yandexFetch, readBookByGet } from '../server/yandex-api.mjs';
 const account='test@yandex.ru', book='https://carddav.yandex.ru/home/contacts/';
 const remote=(extra={})=>({uid:'uid1',href:book+'uid1.vcf',etag:'"1"',name:'Анна',phone:'+79000000001',email:'anna@example.com',org:'',raw:'BEGIN:VCARD\r\nVERSION:3.0\r\nUID:uid1\r\nFN:Анна\r\nN:;Анна;;;\r\nTEL;TYPE=CELL:+79000000001\r\nTEL;TYPE=HOME:+79000000002\r\nEMAIL:anna@example.com\r\nPHOTO;VALUE=URI:https://example.com/photo.jpg\r\nBDAY:1990-01-02\r\nX-CUSTOM:keep\r\nEND:VCARD\r\n',...extra});
 const linked=(r=remote())=>[{id:'c1',type:'person',name:r.name,blacklisted:true,reason:'CRM only',notes:'CRM only',contacts:[{...identity(r),syncToYandex:true,yandex:{account,book,uid:r.uid,base:identity(r)}}]}];
@@ -112,4 +112,21 @@ test('real tsdav transport discovers books, reads vCards and sends conditional P
   await transport.write(cards[0],{name:'Анна новая',phone:cards[0].phone,email:cards[0].email});
   const put=requests.find(r=>r.method==='PUT');assert.equal(put.headers.get('if-match'),'"1"');assert.match(put.body,/PHOTO;VALUE=URI/);
   await transport.write(null,{name:'Новый',phone:'',email:''},'created');assert.equal(requests.filter(r=>r.method==='PUT')[1].headers.get('if-none-match'),'*');
+});
+test('fallback reader lists cards via PROPFIND and downloads each with GET',async()=>{
+  const bookUrl='https://carddav.yandex.ru/addressbook/u%40yandex.ru/1/',calls=[];
+  const xml=`<?xml version="1.0"?><D:multistatus xmlns:D="DAV:"><D:response><D:href>/addressbook/u%40yandex.ru/1/</D:href><D:propstat><D:prop><D:resourcetype><D:collection/></D:resourcetype></D:prop></D:propstat></D:response><D:response><D:href>/addressbook/u%40yandex.ru/1/a.vcf</D:href><D:propstat><D:prop><D:getetag>&quot;e1&quot;</D:getetag><D:resourcetype/></D:prop></D:propstat></D:response></D:multistatus>`;
+  const fetcher=async(url,options={})=>{calls.push([options.method||'GET',url,options.headers.Authorization]);if(options.method==='PROPFIND')return new Response(xml,{status:207});return new Response('BEGIN:VCARD\r\nVERSION:3.0\r\nUID:a\r\nFN:Тест Анна\r\nEND:VCARD\r\n',{status:200})};
+  const cards=await readBookByGet(bookUrl,'Basic x',fetcher);
+  assert.equal(cards.length,1);assert.equal(cards[0].url,bookUrl+'a.vcf');assert.equal(cards[0].etag,'"e1"');
+  assert.equal(readCard(cards[0]).name,'Тест Анна');assert.ok(calls.every(c=>c[2]==='Basic x'));
+});
+test('preview reports our readable error instead of the generic one',async t=>{
+  const middleware=createYandexMiddleware({connect:async()=>({books:[{url:book,displayName:'B'}],forBook:()=>({async read(){throw new Error('В адресной книге повторяется UID контакта.')}})})});
+  const server=createServer((req,res)=>middleware(req,res,()=>{res.writeHead(404);res.end()}));await new Promise(r=>server.listen(0,'127.0.0.1',r));t.after(()=>server.close());
+  const origin=`http://127.0.0.1:${server.address().port}`;
+  const call=async(path,body,cookie)=>{const r=await fetch(origin+path,{method:'POST',headers:{Origin:origin,'Content-Type':'application/json',...(cookie?{Cookie:cookie}:{})},body:JSON.stringify(body)});return{status:r.status,body:await r.json(),cookie:r.headers.get('set-cookie')?.split(';')[0]}};
+  const c=await call('/api/yandex/connect',{username:'u@yandex.ru',password:'p'});
+  const p=await call('/api/yandex/preview',{book,clients:[]},c.cookie);
+  assert.equal(p.status,502);assert.match(p.body.error,/повторяется UID/);
 });

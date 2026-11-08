@@ -17,12 +17,45 @@ export async function yandexFetch(url, options = {}) {
   throw new Error('Слишком много перенаправлений');
 }
 
+// Fallback reader: plain PROPFIND (Depth 1) for the card list, then GET for each card.
+// Used when the server rejects the REPORT requests that tsdav sends.
+const xmlText = s => s.replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim();
+export async function readBookByGet(bookUrl, authorization, fetcher = yandexFetch) {
+  const res = await fetcher(bookUrl, { method: 'PROPFIND', headers: { Authorization: authorization, Depth: '1', 'Content-Type': 'application/xml; charset=utf-8' },
+    body: '<?xml version="1.0" encoding="utf-8"?><d:propfind xmlns:d="DAV:"><d:prop><d:getetag/><d:resourcetype/></d:prop></d:propfind>' });
+  if (res.status !== 207 && !res.ok) throw new Error(`PROPFIND ${res.status}`);
+  const xml = await res.text(), self = bookUrl.replace(/\/$/, '');
+  const items = [...xml.matchAll(/<(?:[\w-]+:)?response\b[\s\S]*?<\/(?:[\w-]+:)?response>/g)].map(([r]) => {
+    const href = /<(?:[\w-]+:)?href>([^<]+)</.exec(r)?.[1];
+    return href && { url: new URL(xmlText(href), bookUrl).href, etag: xmlText(/<(?:[\w-]+:)?getetag>([^<]*)</.exec(r)?.[1] || ''), collection: /<(?:[\w-]+:)?collection\b/.test(r) };
+  }).filter(i => i && !i.collection && i.url.replace(/\/$/, '') !== self);
+  const cards = [];
+  for (let i = 0; i < items.length; i += 8) {
+    const batch = await Promise.all(items.slice(i, i + 8).map(async item => {
+      const r = await fetcher(item.url, { headers: { Authorization: authorization } });
+      if (!r.ok) throw new Error(`GET ${r.status}`);
+      return { url: item.url, etag: r.headers.get('etag') || item.etag, data: await r.text() };
+    }));
+    cards.push(...batch);
+  }
+  return cards;
+}
+const isCard = c => typeof c?.data === 'string' && c.data.includes('BEGIN:VCARD');
+
 export async function connectYandex(username, password) {
+  const authorization = 'Basic ' + Buffer.from(`${username}:${password}`).toString('base64');
   const client = await createDAVClient({ serverUrl: YANDEX_SERVER, credentials: { username, password }, authMethod: 'Basic', defaultAccountType: 'carddav', fetch: yandexFetch });
   const books = await client.fetchAddressBooks();
   if (!books.length) throw new Error('Адресные книги не найдены. Проверьте доступ к контактам.');
   return { books, forBook(book) { return {
-    async read() { return (await client.fetchVCards({ addressBook: book })).map(readCard); },
+    async read() {
+      let cards;
+      try { cards = await client.fetchVCards({ addressBook: book }); if (cards.some(c => !isCard(c))) throw new Error('REPORT returned cards without address-data'); }
+      catch (err) { console.error('[yandex] fetchVCards failed, falling back to PROPFIND+GET:', err?.message); cards = await readBookByGet(book.url, authorization); }
+      const skipped = cards.filter(c => !isCard(c)).length;
+      if (skipped) console.error(`[yandex] skipped ${skipped} non-vCard entries`);
+      return cards.filter(isCard).map(readCard);
+    },
     async write(remote, local, uid) {
       if (remote && !remote.etag) throw new Error('Сервер не передал ETag. Контакт не перезаписан.');
       const data = writeCard(remote, local, uid);
@@ -107,7 +140,10 @@ export function createYandexMiddleware({ connect = connectYandex, now = () => Da
       }
       return send(404, { error: 'Неизвестная операция' });
     } catch (err) {
-      return send(err.status || 502, { error: err.status === 413 ? err.message : 'Синхронизация не выполнена. Проверьте подключение, кодировку и дубли контактов, затем повторите предпросмотр.' });
+      console.error('[yandex] request failed:', req.url, err?.status || '', err?.message);
+      // Our own errors are written in Russian for the user; library/network errors are not shown verbatim.
+      if (err.status === 413 || /[а-яё]/i.test(err?.message || '')) return send(err.status || 502, { error: err.message });
+      return send(err.status || 502, { error: 'Синхронизация не выполнена. Проверьте подключение, кодировку и дубли контактов, затем повторите предпросмотр.' });
     } finally { if (ownsLock && session) session.busy = false; }
   };
   handler.purgeAll=purgeAll;
