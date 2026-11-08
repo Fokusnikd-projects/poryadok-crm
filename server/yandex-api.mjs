@@ -47,11 +47,15 @@ export async function connectYandex(username, password) {
   const client = await createDAVClient({ serverUrl: YANDEX_SERVER, credentials: { username, password }, authMethod: 'Basic', defaultAccountType: 'carddav', fetch: yandexFetch });
   const books = await client.fetchAddressBooks();
   if (!books.length) throw new Error('Адресные книги не найдены. Проверьте доступ к контактам.');
+  console.error(`[yandex] connected, ${books.length} address book(s): ${books.map(b => typeof b.displayName === 'string' ? b.displayName : '?').join(', ')}`);
   return { books, forBook(book) { return {
     async read() {
-      let cards;
+      let cards = [], via = 'REPORT';
       try { cards = await client.fetchVCards({ addressBook: book }); if (cards.some(c => !isCard(c))) throw new Error('REPORT returned cards without address-data'); }
-      catch (err) { console.error('[yandex] fetchVCards failed, falling back to PROPFIND+GET:', err?.message); cards = await readBookByGet(book.url, authorization); }
+      catch (err) { console.error('[yandex] fetchVCards failed:', err?.message); cards = []; }
+      // Some servers answer the REPORT with an empty list instead of an error: double-check with PROPFIND.
+      if (!cards.length) { via = 'PROPFIND'; cards = await readBookByGet(book.url, authorization); }
+      console.error(`[yandex] read ${cards.length} entries via ${via} from book ${new URL(book.url).pathname.split('/').filter(Boolean).pop()}`);
       const skipped = cards.filter(c => !isCard(c)).length;
       if (skipped) console.error(`[yandex] skipped ${skipped} non-vCard entries`);
       return cards.filter(isCard).map(readCard);
