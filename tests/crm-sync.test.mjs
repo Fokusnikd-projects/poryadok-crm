@@ -121,6 +121,15 @@ test('fallback reader lists cards via PROPFIND and downloads each with GET',asyn
   assert.equal(cards.length,1);assert.equal(cards[0].url,bookUrl+'a.vcf');assert.equal(cards[0].etag,'"e1"');
   assert.equal(readCard(cards[0]).name,'Тест Анна');assert.ok(calls.every(c=>c[2]==='Basic x'));
 });
+test('fallback reader understands the exact PROPFIND shape of carddav.yandex.ru',async()=>{
+  // Unprefixed <href xmlns="DAV:"> and extensionless card names, as returned by Yandex.
+  const bookUrl='https://carddav.yandex.ru/addressbook/u%40yandex.ru/1/';
+  const xml=`<?xml version='1.0' encoding='utf-8'?>\n<D:multistatus xmlns:D="DAV:"><D:response><href xmlns="DAV:">/addressbook/u%40yandex.ru/1/</href><D:propstat><D:prop><D:getetag>1794173491057</D:getetag><D:resourcetype><E:addressbook xmlns:E="urn:ietf:params:xml:ns:carddav"/><D:collection/></D:resourcetype></D:prop><status xmlns="DAV:">HTTP/1.1 200 OK</status></D:propstat></D:response><D:response><href xmlns="DAV:">/addressbook/u%40yandex.ru/1/YA-100</href><D:propstat><D:prop><D:getetag>"100-563"</D:getetag><D:resourcetype/></D:prop><status xmlns="DAV:">HTTP/1.1 200 OK</status></D:propstat></D:response><D:response><href xmlns="DAV:">/addressbook/u%40yandex.ru/1/YA-29</href><D:propstat><D:prop><D:getetag>"29-563"</D:getetag><D:resourcetype/></D:prop><status xmlns="DAV:">HTTP/1.1 200 OK</status></D:propstat></D:response></D:multistatus>`;
+  const fetcher=async(url,options={})=>options.method==='PROPFIND'?new Response(xml,{status:207}):new Response('BEGIN:VCARD\r\nVERSION:3.0\r\nFN:X\r\nEND:VCARD\r\n',{status:200});
+  const cards=await readBookByGet(bookUrl,'Basic x',fetcher);
+  assert.deepEqual(cards.map(c=>c.url),[bookUrl+'YA-100',bookUrl+'YA-29']);
+  assert.deepEqual(cards.map(c=>c.etag),['"100-563"','"29-563"']);
+});
 test('preview reports our readable error instead of the generic one',async t=>{
   const middleware=createYandexMiddleware({connect:async()=>({books:[{url:book,displayName:'B'}],forBook:()=>({async read(){throw new Error('В адресной книге повторяется UID контакта.')}})})});
   const server=createServer((req,res)=>middleware(req,res,()=>{res.writeHead(404);res.end()}));await new Promise(r=>server.listen(0,'127.0.0.1',r));t.after(()=>server.close());

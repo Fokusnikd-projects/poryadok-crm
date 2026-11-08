@@ -26,8 +26,8 @@ export async function readBookByGet(bookUrl, authorization, fetcher = yandexFetc
   if (res.status !== 207 && !res.ok) throw new Error(`PROPFIND ${res.status}`);
   const xml = await res.text(), self = bookUrl.replace(/\/$/, '');
   const items = [...xml.matchAll(/<(?:[\w-]+:)?response\b[\s\S]*?<\/(?:[\w-]+:)?response>/g)].map(([r]) => {
-    const href = /<(?:[\w-]+:)?href>([^<]+)</.exec(r)?.[1];
-    return href && { url: new URL(xmlText(href), bookUrl).href, etag: xmlText(/<(?:[\w-]+:)?getetag>([^<]*)</.exec(r)?.[1] || ''), collection: /<(?:[\w-]+:)?collection\b/.test(r) };
+    const href = /<(?:[\w-]+:)?href\b[^>]*>([^<]+)</.exec(r)?.[1];
+    return href && { url: new URL(xmlText(href), bookUrl).href, etag: xmlText(/<(?:[\w-]+:)?getetag\b[^>]*>([^<]*)</.exec(r)?.[1] || ''), collection: /<(?:[\w-]+:)?collection\b/.test(r) };
   }).filter(i => i && !i.collection && i.url.replace(/\/$/, '') !== self);
   const responses = (xml.match(/<(?:[\w-]+:)?response\b/g) || []).length;
   console.error(`[yandex] PROPFIND ${res.status}: ${responses} responses, ${items.length} cards`);
@@ -46,6 +46,7 @@ export async function readBookByGet(bookUrl, authorization, fetcher = yandexFetc
 const isCard = c => typeof c?.data === 'string' && c.data.includes('BEGIN:VCARD');
 
 export async function connectYandex(username, password) {
+  let reportUnsupported = false;
   const authorization = 'Basic ' + Buffer.from(`${username}:${password}`).toString('base64');
   const client = await createDAVClient({ serverUrl: YANDEX_SERVER, credentials: { username, password }, authMethod: 'Basic', defaultAccountType: 'carddav', fetch: yandexFetch });
   const books = await client.fetchAddressBooks();
@@ -54,14 +55,18 @@ export async function connectYandex(username, password) {
   return { books, forBook(book) { return {
     async read() {
       let cards = [], via = 'REPORT';
-      try { cards = await client.fetchVCards({ addressBook: book }); if (cards.some(c => !isCard(c))) throw new Error('REPORT returned cards without address-data'); }
-      catch (err) { console.error('[yandex] fetchVCards failed:', err?.message); cards = []; }
+      try { if (reportUnsupported) throw new Error('REPORT not supported'); cards = await client.fetchVCards({ addressBook: book }); if (cards.some(c => !isCard(c))) throw new Error('REPORT returned cards without address-data'); }
+      catch (err) { if (!reportUnsupported) console.error('[yandex] fetchVCards failed:', String(err?.message).slice(0, 200)); if (/supported-report|403|501/.test(String(err?.message))) reportUnsupported = true; cards = []; }
       // Some servers answer the REPORT with an empty list instead of an error: double-check with PROPFIND.
       if (!cards.length) { via = 'PROPFIND'; cards = await readBookByGet(book.url, authorization); }
       console.error(`[yandex] read ${cards.length} entries via ${via} from book ${new URL(book.url).pathname.split('/').filter(Boolean).pop()}`);
       const skipped = cards.filter(c => !isCard(c)).length;
       if (skipped) console.error(`[yandex] skipped ${skipped} non-vCard entries`);
-      return cards.filter(isCard).map(readCard);
+      // One unreadable card (legacy encoding, broken vCard) must not block the whole book: skip it and log.
+      const parsed = [], broken = [];
+      for (const card of cards.filter(isCard)) { try { parsed.push(readCard(card)); } catch (err) { broken.push(err.message); } }
+      if (broken.length) console.error(`[yandex] skipped ${broken.length} unreadable cards: ${[...new Set(broken)].join('; ')}`);
+      return parsed;
     },
     async write(remote, local, uid) {
       if (remote && !remote.etag) throw new Error('Сервер не передал ETag. Контакт не перезаписан.');
